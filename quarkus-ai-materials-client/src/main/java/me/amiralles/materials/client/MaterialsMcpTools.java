@@ -3,7 +3,9 @@ package me.amiralles.materials.client;
 import io.quarkiverse.mcp.server.Tool;
 import io.quarkiverse.mcp.server.ToolArg;
 import io.quarkus.runtime.Startup;
+import io.quarkus.security.identity.SecurityIdentity;
 import io.smallrye.mutiny.Uni;
+import jakarta.annotation.security.RolesAllowed;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import me.amiralles.materials.client.model.*;
@@ -30,6 +32,9 @@ public class MaterialsMcpTools {
     @Inject
     BomResource bomResource;
 
+    @Inject
+    SecurityIdentity identity;
+
     @Startup
     void init() {
         LOGGER.info("Starting Materials client MCP server, application URL: " + baseUrl);
@@ -38,6 +43,7 @@ public class MaterialsMcpTools {
     // --- Material tools ---
 
     @Tool(description = "Lists materials, optionally filtered by name, supplier reference, or category. Category values: FABRIC, THREAD, BUTTON, ZIPPER, LABEL, LINING, INTERLINING, ELASTIC, PACKAGING")
+    //@RolesAllowed({"material-engineer, junior-material-engineer"})
     public Uni<List<Material>> list_materials(
             @ToolArg(description = "Filter by material name (partial match)", required = false) String name,
             @ToolArg(description = "Filter by supplier reference code", required = false) String supplierRef,
@@ -69,6 +75,26 @@ public class MaterialsMcpTools {
         LOGGER.infof("MCP Tool: Listing attachments for material id=%d", id);
         return materialResource.listAttachments(id)
                 .onFailure().invoke(t -> LOGGER.errorf(t, "list_material_attachments failed: %s", t.getMessage()));
+    }
+
+    @Tool(description = "Lists file attachments for a material, filtered by role: material-engineers see all types, junior-material-engineers see IMAGE attachments only")
+    @RolesAllowed({"material-engineer", "junior-material-engineer"})
+    public Uni<List<MaterialAttachment>> list_material_attachments_rbac(
+            @ToolArg(description = "The ID of the material", required = true) Long id) {
+        LOGGER.infof("MCP Tool: Listing filtered attachments for material id=%d, principal=%s",
+                id, identity.getPrincipal().getName());
+        return materialResource.listAttachments(id)
+                .map(attachments -> {
+                    if (identity.hasRole("junior-material-engineer")
+                            && !identity.hasRole("material-engineer")) {
+                        return attachments.stream()
+                                .filter(a -> AttachmentType.IMAGE.equals(a.attachmentType))
+                                .collect(java.util.stream.Collectors.toList());
+                    }
+                    return attachments;
+                })
+                .onFailure().invoke(t -> LOGGER.errorf(t,
+                        "list_material_attachments_filtered failed: %s", t.getMessage()));
     }
 
     @Tool(description = "Gets a specific attachment for a material by attachment ID")
